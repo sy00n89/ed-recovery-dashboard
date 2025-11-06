@@ -1,0 +1,12 @@
+Role,Name (placeholder),Responsibilities,RACI
+Project Sponsor,Dean of Student Health,Sets direction and approves scope,A
+Program Owner,Director of Counseling Services,Prioritizes outcomes and accepts deliverables,A
+Research Lead,Reese Yoon,Discovery plan, analysis, reporting,R
+Data Engineer,To be assigned,ETL, data cleaning, pipelines,R
+UX Lead,To be assigned,Personas, journeys, experience vision,R
+Clinician SME,Campus Dietitian/Therapist,Clinical context, validates insights,C
+Student Rep,Student Advocate,User needs, accessibility feedback,C
+Security/Privacy,IT Privacy Officer,Data handling, compliance,C
+Engineering Lead,IT Applications,Cloud deploy, reliability,R
+QA/Testing,Analyst,Validation and UAT,C
+Stakeholder Group,Admin & Partners,Feedback and alignment,I

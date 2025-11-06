@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+
+# Environments
+.venv/
+env/
+venv/
+
+# OS
+.DS_Store
+
+# Notebooks cache
+.ipynb_checkpoints/
+
+# Local data exports
+data/processed/
+data/interim/
+exports/
+reports/
+
+# VS Code
+.vscode/

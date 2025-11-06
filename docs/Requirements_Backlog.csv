@@ -1,0 +1,9 @@
+ID,Type,As a...,I want...,So that...,Priority (MoSCoW),Acceptance Criteria
+REQ-01,Functional,Program Owner,upload existing survey CSVs,they are analyzed quickly,MUST,CSV upload accepts the two templates; row/column counts displayed
+REQ-02,Functional,Clinician,filter responses by role/topic,to summarize key needs,SHOULD,Filter controls render; counts update; export works
+REQ-03,Functional,Student Rep,see top barriers & requested features,to advocate for better resources,MUST,Bar chart & table with counts; date range filter
+REQ-04,Functional,Research Lead,run basic tagging (topic/sentiment),to accelerate coding,MUST,Labels stored; confidence displayed; manual override allowed
+REQ-05,Non-Functional,Sponsor,secure access,to protect privacy,MUST,Basic auth; HTTPS at deploy; no PII at rest; access log
+REQ-06,Non-Functional,IT Lead,99% uptime in pilot,stakeholders can reliably access,SHOULD,Monitoring page; uptime report for 30 days
+REQ-07,UX,Student,clear path to resources,to avoid drop-off,MUST,Journey map & experience principles documented
+REQ-08,Reporting,Admin,export summaries,to support quarterly planning,COULD,CSV/XLSX export with filters applied
