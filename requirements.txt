@@ -1,4 +1,13 @@
-pandas==2.2.2
-numpy==1.26.4
-python-dateutil==2.9.0.post0
-chardet==5.2.0
+streamlit
+plotly
+pandas
+numpy
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+requests
+urllib3
+certifi
+charset-normalizer
+idna
