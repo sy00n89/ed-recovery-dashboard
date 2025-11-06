@@ -3,7 +3,6 @@
 **Owner:** Reese Yoon  
 **Date:** November 06, 2025
 
-This repository is the foundation for an IBM-style consulting build that aligns with both **Associate Application Consultant** and **Associate Experience Consultant** roles.
 
 ## What’s Here (Phase 1)
 - **`docs/Phase1_Project_Charter.md`** — Client-framed charter with SMART metrics, scope, risks, and governance.
