@@ -9,7 +9,7 @@
 - **`docs/Phase1_Discovery_Plan_and_Interview_Guide.md`** — Interview guide + discovery methods.
 - **`docs/Stakeholder_Map_RACI.csv`** — Stakeholders and responsibilities.
 - **`docs/Requirements_Backlog.csv`** — Initial MoSCoW-prioritized backlog.
-- **`data/raw/`** — Your current survey datasets (copied here).
+- **`data/raw/`** — survey datasets.
 - **`scripts/audit_data.py`** — Quick data audit (shapes, columns, basic PII checks).
 
 > **Rule:** Only use the current data. No external data sources will be added in Phase 1.

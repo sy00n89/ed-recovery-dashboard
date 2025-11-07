@@ -1,494 +1,599 @@
 #!/usr/bin/env python3
-# Streamlit Live Insight Dashboard for Mirror
-# Reads data/processed/combined_responses.csv and provides interactive filters + charts.
-# Optional: Click "Sync from Google Sheets" to pull latest data and re-clean.
+# Mirror — Live Insight Dashboard (Public Google Sheets · clear insights)
+# Uses your two public Sheet URLs (with known gid) and auto-detects columns.
 
-import os
 from pathlib import Path
-import subprocess
-import pandas as pd
-import streamlit as st
-import plotly.express as px
-import re
+import io, re, requests
+from collections import Counter
 import numpy as np
-from collections import Counter, defaultdict
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+import html, unicodedata
+
+def clean_text(s: str) -> str:
+    """Fix common Google Sheets csv mojibake & smart quotes."""
+    if s is None:
+        return ""
+    s = html.unescape(str(s))
+    # common mojibake from UTF-8 → Latin-1 mismatch
+    fixes = {
+        "â€™": "'", "â€˜": "'", "â€œ": '"', "â€\x9d": '"', "â€“": "–", "â€”": "—",
+        "â€": '"', "Â": "", "â€¦": "…"
+    }
+    for bad, good in fixes.items():
+        s = s.replace(bad, good)
+    return unicodedata.normalize("NFKC", s).strip()
 
 
-REPO = Path(__file__).resolve().parent
-DATA_DIR = REPO / "data" / "processed"
-COMBINED = DATA_DIR / "combined_responses.csv"
-STUDENT = DATA_DIR / "student_clean.csv"
-MEDICAL = DATA_DIR / "medical_clean.csv"
+# ───────────────────────────── Page / Style ─────────────────────────────
+st.set_page_config(page_title="Mirror — Live Insights", layout="wide")
+px.defaults.template = "plotly_white"
+px.defaults.color_discrete_sequence = px.colors.qualitative.Pastel
 
-PII_KEYWORDS = ("email", "e-mail", "name", "first name", "last name", "contact", "phone", "address")
+st.title("Mirror — Live Insight Dashboard")
+st.caption("Data auto-loads from public Google Sheets (every 60s). Focused on clarity and insight.")
 
-# Ensure service account exists when running in the cloud (Streamlit Secrets)
-try:
-    if "service_account_json" in st.secrets:
-        cred_dir = REPO / "credentials"
-        cred_dir.mkdir(exist_ok=True, parents=True)
-        (cred_dir / "service_account.json").write_text(st.secrets["service_account_json"])
-except Exception:
-    pass
+# Auto-refresh every 60s
+st.markdown("<meta http-equiv='refresh' content='60'>", unsafe_allow_html=True)
 
+# ───────────────────────────── Your live Sheets ─────────────────────────────
+# You gave these:
+DATA_PROS_EDIT     = "https://docs.google.com/spreadsheets/d/13lY6kHhiJCJP6CBP2CQbtVQzuffS2mn-vXCXC9CtlYE/edit?gid=1896040034#gid=1896040034"
+DATA_STUDENTS_EDIT = "https://docs.google.com/spreadsheets/d/1qin5S0V2beHcj3A2oV48nF_TX5pW73_M8IdIqx3HIVY/edit?gid=1750397413#gid=1750397413"
 
-# Simple topic buckets for quick summaries
-TOPIC_BUCKETS = {
-    "Barriers": [
-        "access","wait","cost","insurance","time","stigma","shame","privacy","confidential","schedule","distance"
-    ],
-    "Helpful supports": [
-        "peer","community","group","friend","family","therap","counsel","dietitian","coach","mentor","support"
-    ],
-    "Desired features": [
-        "anonymous","chat","journal","track","goal","reminder","resource","crisis","hotline","moderation",
-        "identity","lgbt","bipoc","athlete","meal","plan"
-    ],
+# ── Text cleanup helpers ─────────────────────────────────────────
+import unicodedata
+
+SMART_QUOTE_MAP = {
+    "“":"\"", "”":"\"", "‘":"'", "’":"'", "—":"-", "–":"-",
+    "…":"...", "•":"-", "\u00a0":" ", "\u200b":""  # nbsp/zwsp
 }
 
-st.set_page_config(page_title="Mirror — Live Insights", layout="wide")
-st.title("Mirror — Live Insight Dashboard")
+def _fix_mojibake(s: str) -> str:
+    # Many forms show artifacts like "didnâ€™t" when UTF-8 was read as CP1252/Latin-1
+    try:
+        t = s.encode("latin1").decode("utf-8")   # common fix path
+    except Exception:
+        t = s
+    return t
 
-if st.button("🔁 Manual refresh"):
-    st.rerun()
+def clean_text(s: str | float) -> str:
+    if pd.isna(s): return ""
+    t = str(s)
+    t = _fix_mojibake(t)
+    t = unicodedata.normalize("NFKC", t)
+    for k,v in SMART_QUOTE_MAP.items():
+        t = t.replace(k, v)
+    # collapse whitespace
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
-# --- Optional HTML auto-refresh every 60 seconds ---
-st.markdown(
-    "<meta http-equiv='refresh' content='60'>",
-    unsafe_allow_html=True
-)
-
-
-# --- Helper: safe read with basic PII guard ---
-def load_combined():
-    if COMBINED.exists():
-        df = pd.read_csv(COMBINED, dtype=str)
-    else:
-        # fallback: merge student + medical if combined not present
-        frames = []
-        for p in (STUDENT, MEDICAL):
-            if p.exists():
-                frames.append(pd.read_csv(p, dtype=str))
-        df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-    if df.empty:
-        return df
-
-    # PII guard: drop any suspicious columns by name
-    cols_to_drop = [c for c in df.columns if any(k in c.lower() for k in PII_KEYWORDS)]
-    df = df.drop(columns=cols_to_drop, errors="ignore")
-
-    # Try to parse a timestamp-like column automatically
-    ts_candidates = [c for c in df.columns if "timestamp" in c.lower()]
-    if ts_candidates:
-        ts_col = ts_candidates[0]
-        try:
-            df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce")
-        except Exception:
-            pass
+def clean_df_strings(df: pd.DataFrame) -> pd.DataFrame:
+    for c in df.columns:
+        if df[c].dtype == "object":
+            df[c] = df[c].map(clean_text)
     return df
 
-# --- Sidebar controls ---
-with st.sidebar:
-    st.header("Controls")
-    st.caption("Use these to filter and explore responses.")
 
-    if st.button("🔄 Sync from Google Sheets now"):
-        with st.spinner("Pulling latest Google Sheets data..."):
-            # Run the two scripts you and I created
-            pull = subprocess.run(["python", str(REPO / "scripts" / "pull_sheets.py")], capture_output=True, text=True)
-            clean = subprocess.run(["python", str(REPO / "scripts" / "clean_merge_data.py")], capture_output=True, text=True)
-        st.success("Sync complete. Scroll down for details.")
-        with st.expander("View sync logs"):
-            st.code("=== pull_sheets.py ===\n" + pull.stdout + "\n" + pull.stderr + "\n=== clean_merge_data.py ===\n" + clean.stdout + "\n" + clean.stderr)
+# ───────────────────────────── Helpers ─────────────────────────────
+PII_COL_FRAGMENTS = ("email","e-mail","name","first name","last name","contact","phone","address")
+SPLIT_PAT = re.compile(r"[;,/|•]")
 
-    df = load_combined()
-    if df.empty:
-        st.error("No data found. Run the sync or check data/processed/*.csv")
-        st.stop()
-    
-    st.markdown("---")
-    st.subheader("Column mapping")
+# Keyword maps for readable rollup buckets
+BARRIER_KEYWORDS = {
+    "Cost / Insurance": ["cost","expensive","insurance","coverage","copay","financial","money","out-of-network","deductible","authorization"],
+    "Waitlists / Access": ["wait","waitlist","access","availability","appointment","capacity","time","scheduling","long"],
+    "Stigma / Shame / Privacy": ["stigma","shame","privacy","confidential","embarrass","judg","afraid"],
+    "Knowledge / Awareness": ["awareness","know","education","information","misinfo","understand"],
+    "Distance / Transport": ["distance","transport","travel","commute","far"],
+    "Motivation / Readiness": ["motivation","ready","ambivalence","willingness","denial"],
+    "Comorbidity / Severity": ["depress","anxiety","ocd","self harm","suic","medical","severity"],
+    "Fit / Quality of Care": ["fit","therapist","specialist","quality","approach","not listen","mismatch","availability"],
+}
+SUPPORT_KEYWORDS = {
+    "Outpatient therapy": ["outpatient therapy","therapy","therapist","counseling","counsell"],
+    "Group therapy / Peer": ["group therapy","peer","support group","community"],
+    "Family therapy": ["family therapy","family support"],
+    "Dietitian / Nutrition": ["dietitian","nutritionist","meal plan","nutrition","rd","food plan"],
+    "CBT/DBT/FBT/ACT": ["cbt","dbt","fbt","act","ifs","somatic"],
+    "Crisis / Hotline": ["crisis","hotline","988"],
+    "Anonymous / Safe space": ["anonymous","safe space","anon"],
+    "Education / Psychoeducation": ["education","psychoeducation","learn","information","resources"],
+    "Care coordination / Interdisciplinary": ["coordinate","interdisciplinary","team","case manage","refer","triage"],
+    "Higher level of care (IOP/PHP/Inpatient)": ["iop","php","inpatient","residential","hospital"],
+}
 
-    guess = suggest(df)
-    col_willing  = st.selectbox("Willingness column",  options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["willing"]) + 1) if guess["willing"] in df.columns else 0)
-    col_features = st.selectbox("Desired app features", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["features"]) + 1) if guess["features"] in df.columns else 0)
-    col_dx       = st.selectbox("ED diagnosis / type", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["diagnosis"]) + 1) if guess["diagnosis"] in df.columns else 0)
-
-    col_pros_feat = st.selectbox("Professionals' ideal support (features/treatments)", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["pros_feat"]) + 1) if guess["pros_feat"] in df.columns else 0)
-    col_pros_reco = st.selectbox("Professionals' recommended tools/resources", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["pros_reco"]) + 1) if guess["pros_reco"] in df.columns else 0)
-
-    col_helpful  = st.selectbox("Individuals: what actually helped", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["helpful"]) + 1) if guess["helpful"] in df.columns else 0)
-    col_wish     = st.selectbox("Individuals: what do you wish others had done", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["wish"]) + 1) if guess["wish"] in df.columns else 0)
-    col_chal     = st.selectbox("Individuals: challenges", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["challenge"]) + 1) if guess["challenge"] in df.columns else 0)
-    col_inef     = st.selectbox("Treatments that didn’t work", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["ineff"]) + 1) if guess["ineff"] in df.columns else 0)
-
-    col_comm     = st.selectbox("Supportive community (yes/no)", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["community"]) + 1) if guess["community"] in df.columns else 0)
-    col_age      = st.selectbox("Age", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["age"]) + 1) if guess["age"] in df.columns else 0)
-    col_gender   = st.selectbox("Gender", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["gender"]) + 1) if guess["gender"] in df.columns else 0)
-    col_stage    = st.selectbox("Recovery stage (optional)", options=["(none)"] + list(df.columns), index=(list(df.columns).index(guess["stage"]) + 1) if guess["stage"] in df.columns else 0)
-
-    # turn "(none)" into None
-    to_none = lambda x: None if x == "(none)" else x
-    col_willing, col_features, col_dx, col_pros_feat, col_pros_reco, col_helpful, col_wish, col_chal, col_inef, col_comm, col_age, col_gender, col_stage = map(to_none, [col_willing, col_features, col_dx, col_pros_feat, col_pros_reco, col_helpful, col_wish, col_chal, col_inef, col_comm, col_age, col_gender, col_stage])
+WISH_THEMES = {
+    "Listen / Validate (not 'just eat')": ["listen", "validate", "belittle", "just eat", "understood", "honest"],
+    "Identity-specific support": ["lgbt", "male", "men", "bipoc", "identity", "boys", "arfid"],
+    "Meal support / Practical help": ["meal", "meals", "cook", "grocery", "practical", "snack", "plan"],
+    "Peer / Community chat": ["peer", "community", "chat", "support group", "mentor"],
+    "Other": [],  # leave as sink bucket
+}
 
 
-    # Respondent type filter (if present)
-    type_col = "respondent_type" if "respondent_type" in df.columns else None
-    if type_col:
-        types = sorted([t for t in df[type_col].dropna().unique()])
-        chosen_types = st.multiselect("Respondent type", options=types, default=types)
-        if chosen_types:
-            df = df[df[type_col].isin(chosen_types)]
+# Lightweight column inference (header + sample values)
+KEYS = {
+    "age": ("how old","age"),
+    "gender": ("gender","identify as"),
+    "diagnosis": ("diagnosed","which type","type(s) of eating disorder"),
+    "challenge": ("challenge","barrier","struggle","difficult","hardest","obstacle"),
+    "helpful": ("actually helped","helped in your healing","support actually helped","most helpful"),
+    "community": ("supportive community","support system","community support"),
+    "wish": ("wish","would have","should have","i needed","i wish"),
+    # pros
+    "pros_approach": ("treatment approach","what does your treatment look like","modalities","cbt","dbt","fbt","provide"),
+    "pros_recommend": ("recommend","resources","tools","refer","suggest"),
+}
 
-    # Time range filter (if a timestamp column exists)
-    ts_candidates = [c for c in df.columns if "timestamp" in c.lower()]
-    ts_col = ts_candidates[0] if ts_candidates else None
-    if ts_col and pd.api.types.is_datetime64_any_dtype(df[ts_col]):
-        min_dt = df[ts_col].min()
-        max_dt = df[ts_col].max()
-        start, end = st.date_input("Date range", value=(min_dt.date(), max_dt.date()))
-        mask = (df[ts_col].dt.date >= start) & (df[ts_col].dt.date <= end)
-        df = df[mask]
+def extract_sheet_id(url: str) -> str | None:
+    m = re.search(r"/d/([A-Za-z0-9-_]+)/", url)
+    return m.group(1) if m else None
 
-    # Column pickers
-    st.markdown("---")
-    st.subheader("Pick a question to analyze")
-    # Candidate “question” columns: long text or select-multiple often have many unique values
-    ignore_cols = {type_col, ts_col}
-    candidates = [c for c in df.columns if c not in ignore_cols and df[c].notna().sum() > 0]
-    question_col = st.selectbox("Question (column)", options=sorted(candidates))
+def to_export_csv_url(edit_url: str, gid: int | str) -> str:
+    sid = extract_sheet_id(edit_url)
+    return f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}" if sid else edit_url
 
-    st.caption("If this question allows multiple selections, separate values by commas or semicolons for counting.")
+@st.cache_data(show_spinner=False, ttl=60)
+def load_live_csv_from_edit(edit_url: str, gid: int | str) -> tuple[pd.DataFrame, dict]:
+    """Fetch live CSV via export endpoint; return (df, debug)."""
+    url = to_export_csv_url(edit_url, gid)
+    debug = {"export_url": url}
+    try:
+        r = requests.get(url, timeout=20)
+        debug["status"] = r.status_code
+        text = r.text
+        df = pd.read_csv(io.StringIO(text), dtype=str, engine="python", on_bad_lines="skip")
+    except Exception as e:
+        debug["error"] = str(e)
+        df = pd.DataFrame()
 
-# --- Main layout ---
-col1, col2 = st.columns([2, 1])
+    # Hygiene: drop dup headers, PII, and empty cols
+    if not df.empty:
+        df = df.loc[:, ~pd.Index(df.columns).duplicated()]
+        drop_cols = [c for c in df.columns if any(k in c.lower() for k in PII_COL_FRAGMENTS)]
+        df = df.drop(columns=drop_cols, errors="ignore")
+        # normalize all strings (fix mojibake, quotes, whitespace)
+        df = clean_df_strings(df)
 
-def explode_multi(df: pd.DataFrame, col: str) -> pd.Series:
-    """Split multi-select answers on commas/semicolons and count frequencies."""
-    ser = df[col].dropna().astype(str)
-    if ser.empty:
-        return pd.Series(dtype=int)
-    # heuristic: split on commas or semicolons
-    parts = ser.str.split(r"[;,]", regex=True).explode().str.strip()
-    parts = parts[parts != ""]
-    return parts.value_counts()
+        def _all_empty(s: pd.Series) -> bool:
+            return s.dropna().astype(str).str.strip().eq("").all()
+        df = df[[c for c in df.columns if not _all_empty(df[c])]]
 
-def find_col(df, *tokens, default=None, any_match=False):
-    """
-    Return the first column whose name contains ALL tokens (default) or ANY tokens (any_match=True).
-    Tokens are case-insensitive substrings.
-    """
-    toks = [t.lower() for t in tokens if t]
-    cols = list(df.columns)
-    for c in cols:
-        lc = c.lower()
-        ok = any(any(t in lc for t in toks)) if any_match else all(t in lc for t in toks)
-        if ok:
-            return c
-    return default
+    debug["preview"] = (text[:400] if 'text' in locals() else "")
+    return df, debug
 
-def suggest(df):
-    s = {}
-    s["willing"]  = find_col(df, "anonymous", "use", any_match=True) or find_col(df, "anonymous", "space", any_match=True)
-    s["features"] = find_col(df, "include", "app", any_match=True) or find_col(df, "feature", any_match=True)
-    s["diagnosis"]= find_col(df, "diagnos", any_match=True) or find_col(df, "type", "disorder", any_match=True)
-    s["pros_feat"]= find_col(df, "treatment", "look", any_match=True) or find_col(df, "professional", any_match=True)
-    s["pros_reco"]= find_col(df, "profession", "recommend", any_match=True) or find_col(df, "resources", "helpful", any_match=True)
-    s["helpful"]  = find_col(df, "support", "helped", any_match=True) or find_col(df, "helpful", any_match=True)
-    s["wish"]     = find_col(df, "wish", "help", any_match=True)
-    s["challenge"]= find_col(df, "challenge", any_match=True) or find_col(df, "experience", any_match=True)
-    s["ineff"]    = find_col(df, "didn", any_match=True) or find_col(df, "ineffective", any_match=True)
-    s["community"]= find_col(df, "supportive", "community", any_match=True)
-    s["age"]      = find_col(df, "how", "old", any_match=True) or find_col(df, "age", any_match=True)
-    s["gender"]   = find_col(df, "gender", any_match=True)
-    s["stage"]    = find_col(df, "recovery", "stage", any_match=True)
-    return s
+def score(text: str, inc: tuple[str,...]) -> int:
+    t = (text or "").lower()
+    return sum(2 for k in inc if k in t)
 
-def split_multi_series(s: pd.Series) -> pd.Series:
-    """Split multi-select text on commas/semicolons and trim."""
+def infer_col(df: pd.DataFrame, key: str) -> str | None:
+    inc = KEYS.get(key, ())
+    best, best_score = None, 0
+    for c in df.columns:
+        h = score(c, inc)
+        v = score(" ".join(df[c].dropna().astype(str).head(25).tolist()), inc)
+        s = h*3 + v
+        if s > best_score:
+            best, best_score = c, s
+    return best
+
+def explode_multi(s: pd.Series) -> pd.Series:
     if s is None or s.empty:
         return pd.Series(dtype=str)
-    return (
-        s.dropna().astype(str)
-         .str.split(r"[;,]", regex=True)
-         .explode()
-         .str.strip()
-         .replace("", np.nan)
-         .dropna()
+    s = s.dropna().astype(str)
+    parts = s.apply(lambda x: SPLIT_PAT.split(x) if SPLIT_PAT.search(x) else [x])
+    parts = pd.Series([p.strip() for lst in parts for p in lst if p and p.strip()])
+    return parts
+
+def normalize_counts(series: pd.Series, mapping: dict[str,list[str]], top_n=12) -> pd.DataFrame:
+    if series is None or series.empty:
+        return pd.DataFrame(columns=["label","count"])
+    raw = series.astype(str).str.lower()
+    counts = Counter(raw)
+    buckets, leftover = Counter(), Counter()
+    for text, c in counts.items():
+        matched = False
+        for bucket, keys in mapping.items():
+            if any(k in text for k in keys):
+                buckets[bucket] += c
+                matched = True
+        if not matched:
+            leftover[text] += c
+    for text, c in leftover.most_common(8):
+        label = f"Other: {text[:45]}{'…' if len(text)>45 else ''}"
+        buckets[label] += c
+    out = pd.DataFrame([{"label": k, "count": v} for k, v in buckets.items()]) \
+            .sort_values("count", ascending=False).head(top_n).reset_index(drop=True)
+    return out
+
+def series_or_empty(df: pd.DataFrame, col: str) -> pd.Series:
+    return df[col].dropna().astype(str) if (col and col in df.columns) else pd.Series(dtype=str)
+
+def short_label(s: str, maxlen=48) -> str:
+    s = (s or "").strip()
+    return s if len(s) <= maxlen else s[:maxlen-1] + "…"
+
+# ── Per-row wish classification + n-gram mining ───────────────────────────────
+STOPWORDS = set("""
+a an the and or but if when while with without into onto for to of in on at by as
+be is are was were been being do does did have has had can could should would may might
+me my mine you your yours he she it its we our ours they their them this that these those
+just really very not no yes more most less least than then else from about over under out
+""".split())
+
+def classify_wish_texts(series: pd.Series, mapping: dict[str, list[str]]) -> pd.DataFrame:
+    """
+    Return a DataFrame [text, theme] by checking each row against mapping.
+    If multiple themes match, keep the first (order of mapping in code is priority).
+    """
+    rows = []
+    for raw in series.dropna().astype(str):
+        txt = clean_text(raw).lower()
+        assigned = None
+        for theme, keys in mapping.items():
+            if any(k in txt for k in keys):
+                assigned = theme
+                break
+        rows.append((raw, assigned if assigned else "Other"))
+    return pd.DataFrame(rows, columns=["text", "theme"])
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z']+", (text or "").lower()) if t not in STOPWORDS and len(t) > 2]
+
+def ngram_counts(texts: list[str], n: int = 2) -> Counter:
+    """
+    Count frequent n-grams (bigrams/trigrams) from texts.
+    """
+    bag = Counter()
+    for t in texts:
+        toks = _tokens(t)
+        for i in range(len(toks) - n + 1):
+            ng = " ".join(toks[i:i+n])
+            bag[ng] += 1
+    return bag
+
+def auto_promote_from_other(other_texts: list[str], promote_threshold: int = 3, max_promote: int = 4):
+    """
+    Look for repeated bigrams / trigrams in 'Other' and build new themes.
+    Returns list[(label, keywords)] of promotions.
+    """
+    if not other_texts:
+        return []
+
+    bi = ngram_counts(other_texts, 2)
+    tri = ngram_counts(other_texts, 3)
+
+    # merge and rank
+    all_ = bi + tri
+    cands = [(phrase, cnt) for phrase, cnt in all_.most_common(30) if cnt >= promote_threshold]
+
+    promotions = []
+    for phrase, _ in cands:
+        label = phrase.title()
+        keys = phrase.split()  # use words from the phrase as detection seeds
+        # small guard against duplicates
+        if label not in WISH_THEMES and all(not set(keys).issubset(set(v)) for v in WISH_THEMES.values()):
+            promotions.append((label, keys))
+        if len(promotions) >= max_promote:
+            break
+    return promotions
+
+
+# ───────────────────────────── Load live data ─────────────────────────────
+# Use the gid values you supplied
+students, dbg_students = load_live_csv_from_edit(DATA_STUDENTS_EDIT, gid=1750397413)
+pros,     dbg_pros     = load_live_csv_from_edit(DATA_PROS_EDIT,     gid=1896040034)
+
+with st.expander("Debug · Live fetch (click if something looks off)", expanded=False):
+    st.subheader("Students")
+    st.json(dbg_students)
+    st.write("shape:", students.shape)
+    st.subheader("Professionals")
+    st.json(dbg_pros)
+    st.write("shape:", pros.shape)
+
+if students.empty and pros.empty:
+    st.error("Could not read any rows from either Google Sheet.")
+    st.stop()
+
+# ───────────────────────────── Auto-infer key columns ─────────────────────────────
+# Individuals
+S_age        = infer_col(students, "age")
+S_gender     = infer_col(students, "gender")
+S_diag       = infer_col(students, "diagnosis")
+S_challenge  = infer_col(students, "challenge")
+S_helpful    = infer_col(students, "helpful")
+S_wish       = infer_col(students, "wish")
+S_comm       = infer_col(students, "community")
+# Professionals
+P_role       = infer_col(pros, "pros_approach")
+P_reco       = infer_col(pros, "pros_recommend")
+
+# --- Build the Individuals "wishes" series we'll use in D ---
+S_wishes_series = series_or_empty(students, S_wish)
+# (optional but recommended) clean up mojibake / smart quotes
+S_wishes_series = S_wishes_series.map(lambda x: clean_text(x) if pd.notna(x) else x)
+
+
+with st.expander("Auto-detected columns", expanded=False):
+    st.json({
+        "students": {
+            "age": S_age, "gender": S_gender, "diagnosis": S_diag,
+            "challenge": S_challenge, "helpful": S_helpful, "wish": S_wish, "community": S_comm
+        },
+        "professionals": {
+            "treatment_approach": P_role, "recommended": P_reco
+        }
+    })
+
+# ───────────────────────────── A) Overview ─────────────────────────────
+st.markdown("### A) Overview — Who responded")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    n_students, n_pros = len(students), len(pros)
+    comp = pd.DataFrame({"group":["Individuals","Professionals"], "count":[n_students, n_pros]})
+    fig = px.pie(comp, values="count", names="group", hole=0.45)
+    fig.update_traces(textposition="inside", textinfo="percent+label")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Total responses: **{n_students+n_pros:,}** (Individuals: {n_students:,}, Professionals: {n_pros:,})")
+
+with col2:
+    if S_age and S_age in students.columns:
+        ages = students[S_age].dropna().astype(str)
+        age_num = pd.to_numeric(ages.str.extract(r"(\d+)")[0], errors="coerce").dropna()
+        if not age_num.empty:
+            labels = ["≤17", "18–24", "25–34", "35–44", "45–54", "55–64", "65+"]
+            bins = pd.cut(age_num, bins=[0,17,24,34,44,54,64,150],
+                          labels=labels, include_lowest=True, right=True)
+            dist = (bins.value_counts()
+                        .reindex(labels)
+                        .reset_index())
+            dist.columns = ["Age band", "count"]
+            fig = px.bar(dist, x="Age band", y="count")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Individuals — median age: **{int(age_num.median())}** (n={len(age_num)})")
+        else:
+            st.info("Age responses not numeric enough to summarize.")
+    else:
+        st.info("No age column detected in Individuals data.")
+
+
+with col3:
+    if S_gender and S_gender in students.columns:
+        g = students[S_gender].dropna().astype(str).str.strip()
+        g = g[g!=""]
+        if not g.empty:
+            top = g.value_counts().head(6).reset_index()
+            top.columns = ["gender","count"]
+            fig = px.bar(top, x="gender", y="count")
+            fig.update_layout(xaxis_title="", yaxis_title="Count")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No gender responses.")
+    else:
+        st.info("No gender column detected in Individuals data.")
+
+# ───────────────────────────── B) Barriers ─────────────────────────────
+st.markdown("---")
+st.markdown("### B) Barriers to Recovery — Combined View")
+
+def as_items(s: pd.Series) -> pd.Series:
+    if s.empty: return s
+    multi_rate = s.str.contains(SPLIT_PAT).mean()
+    return explode_multi(s) if multi_rate > 0.2 else s
+
+ind_barriers = as_items(series_or_empty(students, S_challenge))
+# If pros don't have a barrier-specific field, their "recommendations" often include access notes; still useful signal.
+pro_barriers = as_items(series_or_empty(pros, P_reco))
+
+ind_roll = normalize_counts(ind_barriers, BARRIER_KEYWORDS, top_n=12)
+pro_roll = normalize_counts(pro_barriers, BARRIER_KEYWORDS, top_n=12)
+if not (ind_roll.empty and pro_roll.empty):
+    ind_roll["who"] = "Individuals"
+    pro_roll["who"] = "Professionals"
+    barriers = pd.concat([ind_roll, pro_roll], ignore_index=True)
+    order = (barriers[barriers["who"]=="Individuals"]
+             .sort_values("count", ascending=False)["label"].tolist())
+    fig = px.bar(barriers, x="label", y="count", color="who", barmode="group",
+                 category_orders={"label": order})
+    fig.update_layout(xaxis_title="", yaxis_title="Mentions (approx.)")
+    fig.update_xaxes(tickangle=30)
+    st.plotly_chart(fig, use_container_width=True)
+    take_ind = ind_roll.head(3).assign(label=lambda d: d["label"].apply(short_label))
+    take_pro = pro_roll.head(3).assign(label=lambda d: d["label"].apply(short_label))
+    st.caption(
+        f"Top barriers — **Individuals:** {', '.join(take_ind['label'].tolist())} · "
+        f"**Professionals:** {', '.join(take_pro['label'].tolist())}"
+    )
+else:
+    st.info("No barrier-style text detected.")
+
+# ───────────────────────────── C) Helpful Supports & Alignment ─────────────────────────────
+st.markdown("---")
+st.markdown("### C) Helpful Supports & Alignment (Individuals vs Professionals)")
+
+ind_help_items = as_items(series_or_empty(students, S_helpful))
+pro_help_items = as_items(series_or_empty(pros, P_role))  # treatment approach = what pros provide
+
+ind_sup = normalize_counts(ind_help_items, SUPPORT_KEYWORDS, top_n=12)
+pro_sup = normalize_counts(pro_help_items, SUPPORT_KEYWORDS, top_n=12)
+
+merged = pd.merge(ind_sup, pro_sup, on="label", how="outer", suffixes=("_ind","_pro")).fillna(0)
+if not merged.empty:
+    merged["diff"] = merged["count_ind"] - merged["count_pro"]
+    merged = merged.sort_values("count_ind", ascending=False)
+    fig = px.bar(
+        merged.melt(id_vars=["label"], value_vars=["count_ind","count_pro"],
+                    var_name="who", value_name="count"),
+        x="label", y="count", color="who", barmode="group",
+        category_orders={"label": merged["label"].tolist()},
+        labels={"who":"Group"}
+    )
+    fig.update_layout(xaxis_title="", yaxis_title="Mentions (approx.)")
+    fig.update_xaxes(tickangle=30)
+    st.plotly_chart(fig, use_container_width=True)
+
+    top_help_ind = ", ".join(merged.head(3)["label"].tolist())
+    biggest_gap = merged.sort_values("diff", ascending=False).head(1)
+    if not biggest_gap.empty:
+        gap_lbl = biggest_gap.iloc[0]["label"]
+        gap_val = int(biggest_gap.iloc[0]["diff"])
+        if gap_val > 0:
+            st.caption(f"Individuals emphasize **{gap_lbl}** more than professionals by ~{gap_val} mentions.")
+        elif gap_val < 0:
+            st.caption(f"Professionals emphasize **{gap_lbl}** more than individuals by ~{abs(gap_val)} mentions.")
+    st.caption(f"Most helpful for individuals: **{top_help_ind}**")
+else:
+    st.info("Not enough helpful/support text to compare.")
+
+# ───────────────────────────── D) Unmet Needs / Wishes for Support ─────────────────────────────
+st.markdown("### D) Unmet Needs / Wishes for Support (Individuals)")
+
+# 1) Per-row classification first (authoritative source of truth)
+wish_rows = classify_wish_texts(S_wishes_series, WISH_THEMES)
+wish_buckets = (wish_rows["theme"]
+                .value_counts()
+                .rename_axis("theme")
+                .reset_index(name="count")
+                .sort_values("count", ascending=False))
+
+# 2) Main chart (always derived from per-row assignments)
+fig = px.bar(wish_buckets, x="theme", y="count")
+fig.update_layout(xaxis_title="", yaxis_title="Mentions (approx.)")
+fig.update_xaxes(tickangle=30)
+st.plotly_chart(fig, use_container_width=True)
+
+# 3) Deep dive into 'Other': mine phrases, auto-promote, and rebuild if needed
+st.markdown("#### Deep Dive — What ‘Other’ Really Means")
+other_texts = wish_rows.loc[wish_rows["theme"] == "Other", "text"].astype(str).tolist()
+
+if not other_texts:
+    st.info("No 'Other' responses found.")
+else:
+    # show a quick n-gram summary
+    bi = ngram_counts(other_texts, 2)
+    tri = ngram_counts(other_texts, 3)
+    top_phrases = pd.DataFrame(
+        [{"phrase": p, "count": c} for p, c in (bi + tri).most_common(12)]
+    )
+    if not top_phrases.empty:
+        fig = px.bar(top_phrases.sort_values("count", ascending=False), x="phrase", y="count")
+        fig.update_layout(xaxis_title="", yaxis_title="Mentions (approx.)")
+        fig.update_xaxes(tickangle=25)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # auto-promote recurring phrases
+    PROMOTE_THRESHOLD = 3
+    promotions = auto_promote_from_other(other_texts, promote_threshold=PROMOTE_THRESHOLD, max_promote=4)
+
+    if promotions:
+        # mutate mapping in-memory, then reclassify + redraw
+        for label, keys in promotions:
+            WISH_THEMES[label] = keys
+        st.success(
+            "Promoted new themes from ‘Other’: " +
+            "; ".join([f"**{lbl}** ({', '.join(keys)})" for lbl, keys in promotions])
+        )
+
+        # Re-run classification with the updated mapping
+        wish_rows = classify_wish_texts(S_wishes_series, WISH_THEMES)
+        wish_buckets = (wish_rows["theme"]
+                        .value_counts()
+                        .rename_axis("theme")
+                        .reset_index(name="count")
+                        .sort_values("count", ascending=False))
+        
+        fig = px.bar(wish_buckets, x="theme", y="count")
+        fig.update_layout(title="D) Unmet Needs / Wishes for Support (Updated with promoted themes)",
+                          xaxis_title="", yaxis_title="Mentions (approx.)")
+        fig.update_xaxes(tickangle=30)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # optional: show a few example lines for the biggest buckets (excluding 'Other')
+    st.markdown("##### Example quotes (sampled)")
+    show_themes = [t for t in wish_buckets["theme"].tolist() if t != "Other"][:5]
+    for t in show_themes:
+        ex = wish_rows.loc[wish_rows["theme"] == t, "text"].head(2).tolist()
+        if not ex:
+            continue
+        st.markdown(f"**{t}** — {len(wish_rows[wish_rows['theme']==t])} mention(s)")
+        for q in ex:
+            st.caption(f"• “{clean_text(q)}”")
+
+
+
+# ───────────────────────────── E) Treatment Gaps — Wishes vs Pros’ Recommendations ─────────────────────────────
+st.markdown("## E) Treatment Gaps — Individuals’ Wishes vs Professionals’ Recommendations")
+
+# Map pros into comparable themes (can overlap SUPPORT_KEYWORDS but keep concise)
+PRO_THEMES = {
+    "Peer / Community chat": ["peer","community","group"],
+    "Education / Resources": ["educat","resource","psychoeducation","handout","guide","workshop","neda"],
+    "Care coordination / Referrals": ["coordinate","referral","refer","triage","network","interdisciplinary"],
+    "Therapy / Modalities": ["cbt","dbt","fbt","act","ifs","somatic","therapy","psychotherapy","counsel"],
+    "Meal support / Plans": ["meal plan","meal support","nutrition","dietitian","rd"],
+    "Higher level of care (IOP/PHP/Inpatient)": ["iop","php","inpatient","residential","partial"],
+    "Access / Cost / Navigation": ["wait","waitlist","access","insurance","coverage","authorization","navigation"],
+    "Identity-specific support": ["lgbt","bipoc","men","boys","athlete","cultural","religion"],
+}
+
+def bucketize_generic(series: pd.Series, themes: dict[str, list[str]]):
+    if series is None or series.empty:
+        return pd.DataFrame(columns=["theme","count"])
+    rows = []
+    for text in series.dropna().astype(str):
+        t = clean_text(text).lower()
+        hits = [theme for theme, keys in themes.items() if any(k in t for k in keys)]
+        if not hits: hits = ["Other"]
+        rows.extend(hits)
+    vc = pd.Series(rows).value_counts().reset_index()
+    vc.columns = ["theme","count"]
+    return vc
+
+wish_counts = bucketize_generic(S_wishes_series, WISH_THEMES)
+pro_counts  = bucketize_generic(series_or_empty(pros, P_reco), PRO_THEMES)
+
+gap = pd.merge(wish_counts, pro_counts, on="theme", how="outer", suffixes=("_wish","_pro")).fillna(0)
+if gap.empty:
+    st.info("Not enough content to compare.")
+else:
+    gap["delta_wish_minus_pro"] = gap["count_wish"] - gap["count_pro"]
+    # clear sort: put biggest patient-asked themes first
+    gap = gap.sort_values(["count_wish","count_pro"], ascending=[False, False])
+
+    fig = px.bar(
+        gap.melt(id_vars=["theme"], value_vars=["count_wish","count_pro"], var_name="Group", value_name="Mentions"),
+        x="theme", y="Mentions", color="Group",
+        category_orders={"theme": gap["theme"].tolist()}
+    )
+    fig.update_layout(xaxis_title="", yaxis_title="Mentions (approx.)")
+    fig.update_xaxes(tickangle=30)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # concise takeaway
+    more_wish = gap.sort_values("delta_wish_minus_pro", ascending=False).head(3)
+    more_pro  = gap.sort_values("delta_wish_minus_pro").head(3)
+    st.caption(
+        "Individuals desire more emphasis on: **" +
+        ", ".join(more_wish["theme"].tolist()) +
+        "**. Professionals emphasize (relative to wishes): **" +
+        ", ".join(more_pro["theme"].tolist()) +
+        "**."
     )
 
-def safe_counts(series: pd.Series) -> pd.DataFrame:
-    if series is None or series.empty:
-        return pd.DataFrame(columns=["value","count"])
-    vc = series.value_counts(dropna=True)
-    return vc.reset_index().rename(columns={"index":"value", series.name if series.name in vc.index else 0:"count"})
 
-def multi_count(df, col):
-    return safe_counts(split_multi_series(df[col])) if col in df.columns else pd.DataFrame(columns=["value","count"])
-
-
+# ───────────────────────────── Recent rows (sanitized) ─────────────────────────────
 st.markdown("---")
-st.subheader("1) Willingness vs Desired Features (size) by Diagnosis (color)")
-
-try:
-    if all(c is not None for c in [col_willing, col_features, col_dx]):
-        # explode features row-wise with row_id alignment
-        base = df[[col_willing, col_dx]].copy()
-        base["row_id"] = base.index
-
-        feats = df[[col_features]].copy()
-        feats["feature"] = split_multi_series(df[col_features])
-        feats["row_id"] = feats.index
-        feats = feats.drop(columns=[col_features])
-
-        tmp = feats.merge(base, on="row_id", how="inner").dropna(subset=["feature", col_willing, col_dx])
-        agg = tmp.groupby([col_willing, "feature", col_dx]).size().reset_index(name="count")
-
-        if not agg.empty:
-            fig = px.scatter(
-                agg, x=col_willing, y="feature", size="count", color=col_dx, size_max=40
-            )
-            fig.update_layout(xaxis_title="Willing to use anonymous space", yaxis_title="Desired feature")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Not enough data for this view.")
-    else:
-        st.info("Pick the willingness, features, and diagnosis columns in the sidebar.")
-except Exception as e:
-    st.warning(f"Bubble chart skipped: {e}")
-
-#Funnel — Pros’ ideal features → Individuals’ desired inclusions
-st.markdown("---")
-st.subheader("2) Ideal Support Funnel (Pros → Individuals)")
-
-try:
-    col_pros_feat = find_col(df, "professional", "treatment") or find_col(df, "what did your treatment look like")
-    col_ind_feat  = find_col(df, "included", "app") or find_col(df, "would you like to see")
-
-    pros = multi_count(df, col_pros_feat)
-    inds = multi_count(df, col_ind_feat)
-
-    pros["stage"] = "Professionals' ideal support"
-    inds["stage"] = "Individuals' desired inclusions"
-    pros.columns = ["label","count","stage"]
-    inds.columns = ["label","count","stage"]
-    funnel = pd.concat([pros, inds], ignore_index=True)
-    if not funnel.empty:
-        fig = px.funnel(funnel, x="count", y="stage", color="label", title=None)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Not enough data for funnel.")
-except Exception as e:
-    st.warning(f"Funnel skipped: {e}")
-
-#Radar — Pros’ recommended vs Individuals’ found helpful
-st.markdown("---")
-st.subheader("3) Pros Recommended vs Individuals Found Helpful (Radar)")
-
-try:
-    col_pros_reco = find_col(df, "profession", "recommend") or find_col(df, "resources", "helpful")
-    col_helpful   = find_col(df, "what kind of support actually helped") or find_col(df, "helpful", "healing")
-    pros = multi_count(df, col_pros_reco)
-    inds = multi_count(df, col_helpful)
-    if not pros.empty and not inds.empty:
-        domain = sorted(set(pros["value"]).union(set(inds["value"])))
-        P = pd.Series(0, index=domain, dtype=int)
-        I = pd.Series(0, index=domain, dtype=int)
-        P.loc[pros["value"]] = pros["count"].values
-        I.loc[inds["value"]] = inds["count"].values
-        radar = pd.DataFrame({"feature": domain, "Professionals": P.values, "Individuals": I.values})
-        fig = px.line_polar(radar.melt("feature", var_name="group", value_name="count"),
-                            r="count", theta="feature", color="group", line_close=True)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Need both professional recommendations and individual helpful tools.")
-except Exception as e:
-    st.warning(f"Radar skipped: {e}")
-
-# Word cloud (bar approximation) — “What do you wish people had done?”
-st.markdown("---")
-st.subheader("4) Wishes for Support — Most Frequent Words (with optional grouping)")
-
-try:
-    # 1) Find the "wish" column robustly (token-based, works with snake_case)
-    col_wish = find_col(df, "wish", "help", any_match=False) or find_col(df, "wish", any_match=True)
-
-    if not col_wish:
-        st.info("Pick a different column name pattern — couldn't find a 'wish' + 'help' question.")
-    else:
-        # 2) Optional grouping by demographics
-        #    Suggest common demographics: respondent_type, identify..., gender, student...
-        group_candidates = [c for c in df.columns if any(k in c.lower() for k in [
-            "respondent_type", "identify", "student", "neuro", "gender", "major", "role"
-        ])]
-        group_col = st.selectbox(
-            "Group by (optional)",
-            options=["(none)"] + group_candidates,
-            index=0
-        )
-        group_col = None if group_col == "(none)" else group_col
-
-        # 3) Tokenize the wish text
-        txt = (
-            df[col_wish].dropna().astype(str).str.lower()
-              .str.replace(r"[^a-z\s]", " ", regex=True)
-        )
-        # A slightly bigger stopword list
-        stop = {
-            "the","and","to","of","a","in","for","it","that","on","is","was","be","with","as","by","or","an",
-            "i","you","your","my","me","we","they","their","our","from","at","this","those","these","had",
-            "have","has","do","did","done","should","could","would","about","more","most","very"
-        }
-
-        def count_words(series: pd.Series, topn=25):
-            tokens = series.str.split().explode()
-            tokens = tokens[~tokens.isin(stop)]
-            if tokens.empty:
-                return pd.DataFrame(columns=["word","count"])
-            out = tokens.value_counts().head(topn).reset_index()
-            out.columns = ["word","count"]
-            return out
-
-        if not group_col:
-            # overall frequencies
-            top = count_words(txt, topn=25)
-            if top.empty:
-                st.info("Not enough text in the selected column.")
-            else:
-                fig = px.bar(top, x="word", y="count", title=None)
-                fig.update_layout(xaxis_title="", yaxis_title="Count")
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            # show up to 4 groups as tabs (keeps the UI readable)
-            vals = [v for v in df[group_col].dropna().astype(str).unique()]
-            vals = vals[:4]  # cap to 4 tabs
-            if not vals:
-                st.info("No non-empty groups found in the selected column.")
-            else:
-                tabs = st.tabs([f"{group_col}: {v}" for v in vals])
-                for v, tab in zip(vals, tabs):
-                    with tab:
-                        sub = txt[df[group_col].astype(str) == v]
-                        top = count_words(sub, topn=20)
-                        if top.empty:
-                            st.info("No text for this subgroup.")
-                        else:
-                            fig = px.bar(top, x="word", y="count")
-                            fig.update_layout(xaxis_title="", yaxis_title="Count")
-                            st.plotly_chart(fig, use_container_width=True)
-
-except Exception as e:
-    st.warning(f"Word summary skipped: {e}")
-
-#Heatmap — Challenges × Ineffective treatments
-st.markdown("---")
-st.subheader("5) Challenges vs Ineffective Treatments (Heatmap)")
-
-try:
-    col_chal = find_col(df, "challenges", "experience")
-    col_inef = find_col(df, "didn’t work") or find_col(df, "didnt work") or find_col(df, "ineffective")
-    if col_chal and col_inef:
-        A = split_multi_series(df[col_chal])
-        B = split_multi_series(df[col_inef])
-        # Build pair counts by joining on index (approximate co-occurrence by row)
-        # Safer: explode both and merge back on original index
-        eA = df[[col_chal]].copy()
-        eA["a"] = split_multi_series(df[col_chal])
-        eB = df[[col_inef]].copy()
-        eB["b"] = split_multi_series(df[col_inef])
-        joined = eA.dropna(subset=["a"]).join(eB.dropna(subset=["b"]), how="inner", lsuffix="_l", rsuffix="_r")
-        if not joined.empty:
-            mat = joined.pivot_table(index="a", columns="b", aggfunc="size", fill_value=0)
-            fig = px.imshow(mat, aspect="auto", labels=dict(x="Ineffective", y="Challenge", color="Count"))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Not enough overlapping rows for heatmap.")
-    else:
-        st.info("Need both a challenges column and an 'ineffective' treatment column.")
-except Exception as e:
-    st.warning(f"Heatmap skipped: {e}")
-
-#Stacked bar — Supportive community vs Helpful supports (filterable)
-st.markdown("---")
-st.subheader("6) Supportive Community vs Helpful Supports (Stacked)")
-
-try:
-    col_comm = find_col(df, "supportive community")
-    col_help = find_col(df, "what kind of support actually helped")
-    col_stage = find_col(df, "recovery stage") or find_col(df, "how old when")  # optional
-    d = df.copy()
-    if col_stage and col_stage in d.columns:
-        stages = ["(All)"] + sorted([x for x in d[col_stage].dropna().unique()])
-        pick = st.selectbox("Filter by recovery stage (optional):", stages, index=0)
-        if pick != "(All)":
-            d = d[d[col_stage] == pick]
-    if col_comm and col_help:
-        m = split_multi_series(d[col_help])
-        # rebuild row-wise to align with community response
-        tmp = d[[col_comm]].join(m.rename("help_item"))
-        gr = tmp.groupby([col_comm, "help_item"]).size().reset_index(name="count")
-        fig = px.bar(gr, x="help_item", y="count", color=col_comm, barmode="stack")
-        fig.update_layout(xaxis_title="Helpful supports", yaxis_title="Count")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Need supportive community yes/no and helpful supports.")
-except Exception as e:
-    st.warning(f"Stacked bar skipped: {e}")
-
-#Scatter — Helpful tools vs “Wish existed”, axes: age & gender
-st.markdown("---")
-st.subheader("7) Helpful Tools vs Wish Existed (Scatter by Age/Gender)")
-
-try:
-    col_helpful = find_col(df, "helpful", "process") or find_col(df, "support", "helped")
-    col_wish_ex = find_col(df, "wish had existed")
-    col_age = find_col(df, "how old are you") or find_col(df, "age")
-    col_gender = find_col(df, "what gender")
-    if all(c in df.columns for c in [col_helpful, col_wish_ex, col_age, col_gender]):
-        A = split_multi_series(df[col_helpful]).rename("helpful_item")
-        B = df[col_wish_ex].fillna("").astype(str).str.slice(0, 40).rename("wish_excerpt")  # short label
-        tmp = df[[col_age, col_gender]].join(A)
-        tmp = tmp.join(B)
-        # Coerce age to numeric (best-effort)
-        tmp["age_num"] = pd.to_numeric(tmp[col_age].str.extract(r"(\d+)")[0], errors="coerce")
-        tmp = tmp.dropna(subset=["age_num"])
-        fig = px.scatter(tmp, x="age_num", y="helpful_item", color=col_gender,
-                         hover_data=["wish_excerpt"], title=None)
-        fig.update_layout(xaxis_title="Age", yaxis_title="Helpful resource/tool")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Need helpful tools, wish existed, age, and gender columns.")
-except Exception as e:
-    st.warning(f"Scatter skipped: {e}")
-
-#Horizontal bars — Reasons for delaying help (pros vs individuals)
-st.markdown("---")
-st.subheader("8) Reasons for Delaying / Avoiding Help (Pros vs Individuals)")
-
-try:
-    # Pros (from medical/professional sheet): look for “reasons” / “barriers”
-    col_pro_delay = find_col(df, "professional", "reason") or find_col(df, "barrier") or find_col(df, "delay")
-    # Individuals: use challenges question
-    col_ind_delay = find_col(df, "challenges", "experience") or find_col(df, "avoid", "help")
-
-    pros = multi_count(df, col_pro_delay)
-    inds = multi_count(df, col_ind_delay)
-
-    pros["who"] = "Professionals"
-    inds["who"] = "Individuals"
-    out = pd.concat([pros, inds], ignore_index=True).dropna()
-    if not out.empty:
-        fig = px.bar(out, x="count", y="value", color="who", orientation="h", barmode="group")
-        fig.update_layout(xaxis_title="Count", yaxis_title="Reason / Challenge")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Need reasons from professionals and challenges from individuals.")
-except Exception as e:
-    st.warning(f"Horizontal bars skipped: {e}")
-
-
-st.markdown("---")
-st.subheader("Recent Responses")
-preview_cols = [c for c in df.columns if not any(k in c.lower() for k in PII_KEYWORDS)]
-st.dataframe(df[preview_cols].tail(25), use_container_width=True)
+st.subheader("Recent Responses (last 25, PII removed)")
+def strip_pii(df: pd.DataFrame) -> pd.DataFrame:
+    safe = [c for c in df.columns if not any(k in c.lower() for k in PII_COL_FRAGMENTS)]
+    return df[safe]
+if not students.empty:
+    st.write("Individuals")
+    st.dataframe(strip_pii(students).tail(25), use_container_width=True)
+if not pros.empty:
+    st.write("Professionals")
+    st.dataframe(strip_pii(pros).tail(25), use_container_width=True)
