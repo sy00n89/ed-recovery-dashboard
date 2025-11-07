@@ -1,68 +1,131 @@
-# ED Recovery Dashboard — Phase 1 (Discovery & Charter)
+# Mirror — ED Recovery Insight Dashboard
 
-**Owner:** Reese Yoon  
-**Date:** November 06, 2025
+*Student-run social impact startup project at Syracuse University*
 
+**Owner**: Reese Yoon
+**Last Updated**: November 2025
 
-## What’s Here (Phase 1)
-- **`docs/Phase1_Project_Charter.md`** — Client-framed charter with SMART metrics, scope, risks, and governance.
-- **`docs/Phase1_Discovery_Plan_and_Interview_Guide.md`** — Interview guide + discovery methods.
-- **`docs/Stakeholder_Map_RACI.csv`** — Stakeholders and responsibilities.
-- **`docs/Requirements_Backlog.csv`** — Initial MoSCoW-prioritized backlog.
-- **`data/raw/`** — survey datasets.
-- **`scripts/audit_data.py`** — Quick data audit (shapes, columns, basic PII checks).
+## Overview
 
-> **Rule:** Only use the current data. No external data sources will be added in Phase 1.
+Mirror is a student-led research and product initiative focused on redefining recovery systems for eating disorders (ED). It bridges clinical care and lived experience through human-centered design, data-driven insights, and iterative prototyping.
 
-## Local Setup (macOS / VS Code)
+The live Streamlit dashboard integrates real-time survey data from Google Sheets to synthesize user insights and guide product hypotheses for Mirror’s future mobile app.
 
-1. **Install prerequisites**
-   - Install **Homebrew** (if you don’t have it): https://brew.sh
-   - `brew install git python`
+## Repository Structure
 
-2. **Clone or unzip this repo**
-   - If you downloaded a ZIP: unzip it and `cd ed-recovery-dashboard`
-   - Or initialize Git (if starting locally):  
-     ```bash
-     cd ed-recovery-dashboard
-     git init
-     ```
+- app.py — Streamlit dashboard (Phases 1–2 complete; Phase 3 prototype testing in progress)
+- requirements.txt — Python dependencies
+- data/ — Feedback logs and live CSV storage (Phase 3)
+- docs/Phase1_Project_Charter.md — Initial charter (objectives, scope, metrics)
+- docs/Phase2_Project_Charter.md — Updated charter for insight synthesis and hypothesis development
+- docs/Phase1_Discovery_Plan_and_Interview_Guide.md — Qualitative interview guide and discovery framework
+- scripts/audit_data.py — Data quality and PII audit script
 
-3. **Create a Python virtual environment**
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+## Project Phases
 
-4. **Open in VS Code**
-   - Install **VS Code**: https://code.visualstudio.com/
-   - Recommended extensions: **Python**, **Pylance**, **GitLens**.
-   - `code .`
+**Phase 1 — Discovery & Data Collection**
 
-5. **Run the Phase 1 data audit**
-   ```bash
-   source .venv/bin/activate
-   python scripts/audit_data.py
-   ```
+- Designed and distributed two Google Forms:
+   - Help Us Build a Better ED Recovery System (Individuals/Students)
+   - Survey for Medical Professionals (Clinicians)
+- Automated data pipeline: Google Sheets → CSV export → Streamlit auto-refresh
+- Dashboard sections:
+   - A) Participant Overview
+   - B) Barriers to Recovery
+   - C) Helpful Supports & Alignment
+- Key insight: Cost, access, and stigma dominate barriers; peer connection is underrepresented in formal care models
 
-## Connect to GitHub (first-time)
+**Phase 2 — Insight Synthesis & Hypothesis Development**
+- NLP-driven keyword theming for Unmet Needs and Treatment Gaps
+- Auto-promotion of “Other” responses using n-gram frequency analysis
+- Qualitative Highlights for empathy mapping
+- Three experience hypotheses for prototype testing:
+   - Listen Mode
+   - Identity Peer Spaces
+   - Meal Micro-Journeys
+- Reduced “Other” classification by more than 60%
 
-1. Create a new **empty** GitHub repo named `ed-recovery-dashboard` (no README/.gitignore).
-2. In Terminal from this folder:
-   ```bash
-   git add .
-   git commit -m "chore: initialize Phase 1 with data + artifacts"
-   git branch -M main
-   git remote add origin https://github.com/<YOUR_USERNAME>/ed-recovery-dashboard.git
-   git push -u origin main
-   ```
+**Phase 3 — Prototype & Validation (In Progress)**
+- Integrated three prototypes into the live dashboard
+- Collects validation feedback (sliders and text) stored in data/prototype_feedback.csv
+- Real-time validation scorecard (helpfulness, empathy, reuse intent)
+- Target outcomes:
+   - ≥ 3.75 average “felt listened”
+   - ≥ 3.5 average “helpfulness”
+   - ≥ 3.0 average “reuse intent”
 
-> If Git asks for credentials, log into GitHub and use **Personal Access Token (classic)** with `repo` scope as your password, or use GitHub Desktop.
+## Market & Research Validation
+- Sources: IBISWorld, PubMed, BioMed Central, Verywell Mind, Healthy Minds Network
+- Industry highlights:
+   - U.S. ED clinic market size: $4.1B (2024)
+   - Growth forecast: ~3.5% annually
+   - Gap: Limited platforms combining peer support, identity safety, and clinical resource matching
+- Evidence-based design principles:
+   - Peer support reduces body dissatisfaction and anxiety
+   - App-based interventions reduce binge-eating behaviors
+   - Peer-guided programs improve long-term engagement
+   - Behavior change techniques (goal-setting, feedback, reflection) inform design
 
-## Next (Phase 2 preview)
-- Synthesize research → personas + journey maps
-- Define experience principles and KPIs
-- Prepare data feature list for the dashboard MVP
+## Local Setup (macOS/VS Code)
+1. Install prereqisites
+   - Install Homebrew: https://brew.sh
+   - brew install git python
+2. Clone this repo
+```bash
+git clone https://github.com/<YOUR_USERNAME>/mirror-insight-dashboard.git
+cd mirror-insight-dashboard
+```
+3. Create a virtual environment
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+4. Run Streamlit 
+```bash
+streamlit run app.py
+```
 
+## Deployment
+
+**Option 1 - Streamlit Cloud**
+1. Push the repo to Github 
+2. Deploy at share.streamlit.io
+3. Select app.py and publish
+
+**Option 2 - Temporary ngrok Tunnel**
+```bash
+streamlit run app.py
+ngrok http 8501
+```
+
+## Tech Stack 
+- Frontend: Streamlit, Plotly Express
+- Data Processing: Pandas, NumPy, Regex NLP
+- Live Data Source: Google Sheets → CSV Export
+- Storage (Phase 3): Local CSV feedback logger
+- Environment: Python 3.12, macOS, VS Code
+
+## Key Learnings 
+- Cost, stigma, and limited identity-specific support remain major barriers
+- Individuals value empathy and peer connection more than formal therapy structures
+- Professionals emphasize structured modalities (CBT, DBT, FBT)
+- Data → Insight → Prototype loop shortened to under one week per phase
+- The dashboard demonstrates a human-centered research path to actionable, measurable design hypotheses
+
+## Roadmap
+- Phase 1 — Discovery & Charter: Complete
+- Phase 2 — Insight Synthesis & Hypotheses: Complete
+- Phase 3 — Prototype & Validation: In Progress
+- Phase 4 — MVP Design Specification: Planned
+
+## About Mirror's Outreach/Research Team (Startup Summary)
+- Vision: Make recovery accessible, data-informed, and community-centered
+- Differentiator: Bridges lived experience and professional care using live analytics and AI-driven synthesis
+- Approach: Research → Insight → Prototype → Validate
+
+## Author
+- Reese (Siwoo) Yoon
+- Information Management & Technology, Syracuse University
+- Student Researcher, Data Analyst, Cloud and UX Enthusiast
