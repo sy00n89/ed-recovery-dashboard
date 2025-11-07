@@ -8,7 +8,7 @@ The project’s goal is to build a digital platform (partnered with universities
 ---
 
 <details>
-<summary><strong>▼ Phase 2 (Insight Synthesis & Experience Hypothesis Development)</strong></summary>
+<summary><strong>Phase 2 (Insight Synthesis & Experience Hypothesis Development)</strong></summary>
 
 **Purpose**
 Leverage human-centered, data-driven analysis to bridge the gap between clinical care and lived experience through a scalable digital recovery support ecosystem.
@@ -49,7 +49,7 @@ Leverage human-centered, data-driven analysis to bridge the gap between clinical
 </details>
 
 <details>
-<summary><strong>▼ Phase 1 (Background / Initial Discovery)</strong></summary>
+<summary><strong>Phase 1 (Background / Initial Discovery)</strong></summary>
 
 **Objectives**
 - Collect and analyze survey data from two populations:  
