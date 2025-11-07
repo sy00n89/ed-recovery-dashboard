@@ -1,79 +1,95 @@
-# Phase 1 — Discovery Plan & Interview Guide  
-**Project:** Mirror — Outreach Research on Student Eating Disorder Recovery  
-**Owner:** Siwoo Yoon (Outreach & Insights Lead, Mirror Startup)  
-**Date:** (Insert today’s date)
+# Phase 2
+## Executive Summary
+- Business need: Universities need earlier, scalable ED support that complements care pathways.
+- Users: Students with lived ED experience; clinicians/dietitians who triage and recommend care.
+- Phase 2 goal: Turn “wishes” into prioritized experience hypotheses and quantify treatment gaps vs pro recommendations.
+- Key outcomes to date:
+  - 80%+ of student “wishes” classified into non-Other themes after auto-promotion.
+  - Top wish themes: Listen/Validate, Identity-specific support, Meal support/Practical help, Peer community.
+  - Gaps vs pros: higher student demand for Listen/Validate + identity support; pros emphasize peer/community and education/resources.
+- Phase 3 success metric (forward-looking): ≥60% intent to use at least one proposed feature within 1 week; ≥30% week-2 re-use intent.
+
+## Phase 2 Plan 
+- Methods: Live Google Sheets → Streamlit dashboard; text normalization; theme bucketing; n-gram mining + auto-promotion to reduce “Other”; side-by-side gap deltas; quote sampling.
+- Artifacts: Sections D/E/F screenshots; gap table with deltas; three hypotheses (below).
+- Top hypotheses:
+  1. “Listen Mode” micro-feature: just-in-time prompts that validate without “just eat.”
+  2. Identity-aligned peer nudge: small, moderated circles (men/ARFID/LGBTQ+) surfaced at the right moment.
+  3. Meal assist micro-journeys: concrete, low-friction meal tasks + celebratory feedback.
+- Risks/guards: Crisis routing, anonymity, clinician configurable guardrails.
+
+## Interview Guide
+- Hypothesis probes aligned to D/E themes (you already have these—promote them to the top).
+- Adoption test: “If we shipped Listen Mode, would you use it this week? What would stop you?”
+- Clinician feasibility: “What minimal signals/data would let you recommend this safely?”
+- Decision rules: Say you’ll greenlight a concept if ≥60% of students accept and clinicians name no high-risk contraindications without mitigation.
+
+# Phase 1 — Discovery & Data Collection Summary
+
+## Purpose
+The goal of Phase 1 was to understand the recovery experience and professional perspective around eating disorders through structured surveys. Insights from this phase shape the foundation for Mirror’s app design and recovery model.
 
 ---
 
-## Objectives
-1. Understand how **students** and **medical professionals** perceive eating disorder recovery support systems.  
-2. Identify **barriers to access** and **desired app features** that would make Mirror valuable for universities and students.  
-3. Align survey and interview insights with **evidence-based research** (PubMed, IBISWorld).  
-4. Deliver clear, actionable insights to guide Mirror’s product and UX teams.
+## What Has Been Completed
+
+### 1. Data Collection
+- **Two separate Google Forms** were distributed:
+  - *Help Us Build a Better ED Recovery System* (Students/Individuals)
+  - *Survey for Medical Professionals*
+- Each form targeted unique but complementary insights:
+  - Students shared experiences, challenges, and desired features.
+  - Professionals shared treatment approaches, resource recommendations, and observed barriers.
+
+### 2. Data Processing
+- All responses sync automatically to public Google Sheets.  
+- Streamlit pulls those sheets via `export?format=csv&gid=...` for live updates.  
+- PII columns are automatically removed, and columns are inferred via keyword matching.  
+- Text responses are split and normalized for keyword analysis.
+
+### 3. Analysis & Dashboard Creation
+- **Dashboard Overview (Phase 1)**
+  - **Section A – Overview:** Age/gender demographics and participant breakdowns.  
+  - **Section B – Barriers to Recovery:** Combined keyword-based visualization from both groups.  
+  - **Section C – Helpful Supports & Alignment:** Comparison of what individuals found helpful vs. what professionals provide.
+- **Methodology**
+  - Implemented lightweight NLP keyword mapping for “barriers” and “supports.”  
+  - Used `plotly.express` for clear visual storytelling (Top-N limit for readability).  
+  - Automatic refresh every 60 seconds.
+
+### 4. Key Learnings (Phase 1)
+- Cost, access, and stigma remain dominant barriers across both groups.  
+- Professionals highlight structured therapies (CBT, DBT, FBT), while individuals emphasize peer and safe-space support.  
+- There is an alignment gap between the clinical focus and the interpersonal/community support individuals desire.  
+- The system now provides an at-a-glance summary without manual setup.
 
 ---
 
-## Research Questions
-- What prevents students from accessing traditional eating disorder care?  
-- What features would make a digital app feel safe, inclusive, and effective?  
-- How do clinicians view app-based recovery tools, and what data would they find credible?  
-- Which **behavior change techniques (BCTs)**—goal setting, reminders, feedback—resonate most with users?
+## Interview Guide (for Qualitative Validation)
+
+**Purpose:** To validate Phase 1 survey insights and explore “why” behind the quantitative trends.
+
+### 1. For Individuals
+1. What aspects of support (formal or informal) have helped you the most in recovery?  
+2. How do you perceive cost, access, and stigma when seeking treatment?  
+3. If you could redesign the recovery process, what would you change or add?  
+4. How do peer or online communities influence your motivation to recover?  
+5. What features in an app would make you feel safe and supported?
+
+### 2. For Professionals
+1. What treatment approaches do you rely on most often for ED recovery?  
+2. Which barriers do you observe most frequently in patient adherence?  
+3. How do you think technology (apps, online platforms) could complement your work?  
+4. What current systems or resources are most effective for your clients?  
+5. What gaps exist between what professionals provide and what patients seek?
 
 ---
 
-## Methods
-- **Data Source:** Existing Google Form survey responses from medical professionals and students (CSV format).  
-- **Approach:**  
-  - Thematic coding of open-ended responses (qualitative analysis).  
-  - Frequency analysis of multiple-choice questions (quantitative patterns).  
-  - Evidence mapping to PubMed research on peer support, CBT-based interventions, and app-based outcomes.  
-- **Optional Interviews:**  
-  - 10–15 minute Zoom or in-person follow-ups with selected students and clinicians (voluntary, anonymous).
-
----
-
-## 👥 Target Participants
-| Group | Why They're Important | Example Sample |
-|--------|----------------------|----------------|
-| Students (18–24) | Primary app users; help define tone, safety, and usability | Undergrad & grad students in recovery or aware of ED issues |
-| Medical Professionals | Validate app credibility & evidence alignment | Dietitians, therapists, campus clinicians |
-| University Staff | Understand institutional adoption potential | Counseling center staff, health admins |
-
----
-
-## 🗣️ Interview & Survey Questions
-### For Students
-1. What makes it hard to ask for help or use campus recovery services?  
-2. What would make you trust and regularly use an app like Mirror?  
-3. What type of community or peer space would make you feel supported?  
-4. Which tools (tracking, journaling, reminders) would help you most in recovery?  
-5. What would make the app feel *safe*, *nonjudgmental*, and *inclusive*?
-
-### For Medical Professionals
-1. What digital tools or apps do you currently recommend for ED recovery?  
-2. What features would make Mirror’s app clinically useful or trustworthy?  
-3. How should Mirror approach moderation and safety in peer-led groups?  
-4. What outcomes or data would you want to see to support Mirror’s credibility?  
-5. How could Mirror best complement (not replace) in-person treatment?
-
----
-
-## Deliverables
-- Cleaned and anonymized dataset (Phase 1 output)  
-- Thematic summary (top 5 recurring feature needs or pain points)  
-- Insight visuals for stakeholder readout  
-- Recommendations document for product & UX teams (Phase 2 handoff)
-
----
-
-## ⚖️ Ethical & Privacy Considerations
-- All responses de-identified (no emails or names used).  
-- Participants informed of voluntary and anonymous participation.  
-- Stored data limited to internal analysis and deleted after project completion.  
-- Findings describe group-level insights, not individual experiences.
-
----
-
-## Next Step (Phase 2)
-- Create user **personas** and **journey maps** using these insights.  
-- Translate findings into prioritized features and UX recommendations for the first Mirror prototype.
+## Next Steps (Phase 2 Prep)
+- Conduct follow-up interviews using the guide above.  
+- Extract new “wish” and “unmet need” themes from student responses.  
+- Add *Phase 2 sections* in the dashboard:
+  1. **Unmet Needs / Wishes for Support**  
+  2. **Treatment Gaps (Professionals vs Individuals)**  
+  3. **Qualitative Highlights (quotes / word clouds)**  
+- Begin drafting design recommendations for the Mirror app prototype.
