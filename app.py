@@ -31,7 +31,7 @@ st.set_page_config(page_title="Miirror — Live Insights", layout="wide")
 px.defaults.template = "plotly_white"
 px.defaults.color_discrete_sequence = px.colors.qualitative.Pastel
 
-st.title("Mirror — Live Insight Dashboard")
+st.title("Miirror — Live Insight Dashboard")
 st.caption("Data auto-loads from public Google Sheets (every 60s). Focused on clarity and insight.")
 
 # Auto-refresh every 60s
