@@ -27,7 +27,7 @@ def clean_text(s: str) -> str:
 
 
 # ───────────────────────────── Page / Style ─────────────────────────────
-st.set_page_config(page_title="Mirror — Live Insights", layout="wide")
+st.set_page_config(page_title="Miirror — Live Insights", layout="wide")
 px.defaults.template = "plotly_white"
 px.defaults.color_discrete_sequence = px.colors.qualitative.Pastel
 
