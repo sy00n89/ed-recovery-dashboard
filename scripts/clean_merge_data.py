@@ -22,6 +22,8 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 IN_STUD = REPO / "data" / "processed" / "student_form_responses.csv"
 IN_MED  = REPO / "data" / "processed" / "medical_form_responses.csv"
+IN_FUTURE = REPO / "data" / "processed" / "future_users_form_responses.csv"
+
 
 OUT_DIR = REPO / "data" / "processed"
 META_DIR = OUT_DIR / "meta"
@@ -89,9 +91,13 @@ def clean_one(df: pd.DataFrame, respondent_type: str):
 def main():
     stud_raw = load_csv(IN_STUD)
     med_raw  = load_csv(IN_MED)
+    future_raw = load_csv(IN_FUTURE)
+
 
     stud_clean, stud_map, stud_pii = clean_one(stud_raw, "student")
     med_clean,  med_map,  med_pii  = clean_one(med_raw,  "medical")
+    future_clean, future_map, future_pii = clean_one(future_raw, "future_app_user")
+
 
     # Save per-dataset outputs
     if not stud_clean.empty:
@@ -100,21 +106,26 @@ def main():
     if not med_clean.empty:
         med_clean.to_csv(OUT_DIR / "medical_clean.csv", index=False)
         med_map.to_csv(META_DIR / "medical_columns_map.csv", index=False)
+    if not future_clean.empty:
+        future_clean.to_csv(OUT_DIR / "future_users_clean.csv", index=False)
+        future_map.to_csv(META_DIR / "future_users_columns_map.csv", index=False)
+
 
     # Save PII removed list (for transparency)
     removed_records = []
-    for name, removed in [("student", stud_pii), ("medical", med_pii)]:
+    for name, removed in [("student", stud_pii), ("medical", med_pii), ("future_app_user", future_pii)]:
         for col in removed:
             removed_records.append({"dataset": name, "column_removed": col})
     pd.DataFrame(removed_records).to_csv(META_DIR / "pii_columns_removed.csv", index=False)
 
     # Merge with safe union of columns
-    combined = pd.concat([stud_clean, med_clean], axis=0, ignore_index=True).fillna(pd.NA)
+    combined = pd.concat([stud_clean, med_clean, future_clean], axis=0, ignore_index=True).fillna(pd.NA)
     combined.to_csv(OUT_DIR / "combined_responses.csv", index=False)
 
     # Quick health prints
     print(f"[OK] student_clean rows: {0 if stud_clean is None else len(stud_clean)}")
     print(f"[OK] medical_clean rows: {0 if med_clean is None else len(med_clean)}")
+    print(f"[OK] future_users_clean rows: {0 if future_clean is None else len(future_clean)}")
     print(f"[OK] combined rows: {len(combined)}")
     print(f"[OK] outputs → {OUT_DIR}")
 
