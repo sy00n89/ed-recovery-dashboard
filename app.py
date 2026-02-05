@@ -201,10 +201,38 @@ with st.sidebar:
         st.rerun()
 
 # ───────────────────────────── Load merged data ─────────────────────────────
+# ───────────────────────────── Load / Build merged data ─────────────────────────────
+def build_data_if_missing():
+    """Run pull + clean scripts in Streamlit Cloud if combined CSV is missing."""
+    if COMBINED.exists():
+        return
+
+    st.warning("combined_responses.csv not found — building it now from source sheets...")
+    pull = subprocess.run(
+        ["python3", str(REPO / "scripts" / "pull_sheets.py")],
+        capture_output=True, text=True
+    )
+    clean = subprocess.run(
+        ["python3", str(REPO / "scripts" / "clean_merge_data.py")],
+        capture_output=True, text=True
+    )
+
+    with st.expander("Build logs (debug)"):
+        st.code("=== pull_sheets.py ===\n" + pull.stdout + "\n" + pull.stderr)
+        st.code("=== clean_merge_data.py ===\n" + clean.stdout + "\n" + clean.stderr)
+
+    if not COMBINED.exists():
+        st.error("Build ran but combined_responses.csv still wasn't created. See logs above.")
+        st.stop()
+
+# Build on cloud if needed
+build_data_if_missing()
+
 df = safe_read_csv(COMBINED)
 if df.empty:
-    st.error("No combined data found. Run pull_sheets.py + clean_merge_data.py first.")
+    st.error("combined_responses.csv exists but is empty/unreadable.")
     st.stop()
+
 
 # Ensure respondent_type exists
 if "respondent_type" not in df.columns:
