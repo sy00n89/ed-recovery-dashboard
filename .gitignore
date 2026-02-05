@@ -24,3 +24,4 @@ reports/
 
 # VS Code
 .vscode/
+credentials/service_account.json
