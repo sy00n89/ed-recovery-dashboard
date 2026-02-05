@@ -1,142 +1,131 @@
 #!/usr/bin/env python3
 """
-Clean & merge your Google Form response CSVs for a live dashboard.
+Pull THREE Google Form response sheets and save each to CSV, tolerating duplicate headers.
 
-Inputs (must exist from pull_sheets.py):
-  data/processed/student_form_responses.csv
-  data/processed/medical_form_responses.csv
-  data/processed/future_users_form_responses.csv
+Works:
+- Locally: uses credentials/service_account.json (if present)
+- Streamlit Cloud: uses st.secrets["gcp_service_account"] (no file needed)
 
-Outputs:
-  data/processed/student_clean.csv
-  data/processed/medical_clean.csv
-  data/processed/future_users_clean.csv
-  data/processed/combined_responses.csv
-
-  data/processed/meta/student_columns_map.csv
-  data/processed/meta/medical_columns_map.csv
-  data/processed/meta/future_users_columns_map.csv
-  data/processed/meta/pii_columns_removed.csv
+Prereqs:
+- pip install gspread google-auth pandas streamlit
+- Share ALL Google Sheets with your service account email (client_email)
 """
 
 from pathlib import Path
-import re
+from collections import defaultdict
 import pandas as pd
+import gspread
 
-REPO = Path(__file__).resolve().parents[1]
+# Streamlit is optional locally; safe import
+try:
+    import streamlit as st
+except Exception:
+    st = None
 
-# Inputs
-IN_STUD   = REPO / "data" / "processed" / "student_form_responses.csv"
-IN_MED    = REPO / "data" / "processed" / "medical_form_responses.csv"
-IN_FUTURE = REPO / "data" / "processed" / "future_users_form_responses.csv"
-
-OUT_DIR  = REPO / "data" / "processed"
-META_DIR = OUT_DIR / "meta"
-META_DIR.mkdir(parents=True, exist_ok=True)
-
-# Columns that look like PII (case-insensitive, substring match)
-PII_PATTERNS = [
-    r"email", r"e-mail", r"\bname\b", r"first[-_\s]*name", r"last[-_\s]*name",
-    r"contact", r"phone", r"address"
+# ====== EDIT THESE: paste each Google Sheet URL and (optionally) tab name ======
+SOURCES = [
+    {
+        "name": "students",
+        "url": "https://docs.google.com/spreadsheets/d/1qin5S0V2beHcj3A2oV48nF_TX5pW73_M8IdIqx3HIVY/edit?usp=sharing",
+        "worksheet": "Form Responses 1",
+        "outfile": "student_form_responses.csv",
+    },
+    {
+        "name": "medical",
+        "url": "https://docs.google.com/spreadsheets/d/13lY6kHhiJCJP6CBP2CQbtVQzuffS2mn-vXCXC9CtlYE/edit?usp=sharing",
+        "worksheet": "Form Responses 1",
+        "outfile": "medical_form_responses.csv",
+    },
+    {
+        "name": "future_users",
+        "url": "https://docs.google.com/spreadsheets/d/1jAxJyBnzqIiLpFJbYtDAQ9D4PD6Dfw1xURH3ijucILI/edit?usp=sharing",
+        "worksheet": "Form Responses 1",
+        "outfile": "future_users_form_responses.csv",
+    },
 ]
-PII_REGEXES = [re.compile(pat, re.I) for pat in PII_PATTERNS]
+# ================================================================================
 
-def is_pii(col: str) -> bool:
-    col_s = col or ""
-    return any(rx.search(col_s) for rx in PII_REGEXES)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CRED_PATH = REPO_ROOT / "credentials" / "service_account.json"
+OUT_DIR = REPO_ROOT / "data" / "processed"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def normalize_col(col: str) -> str:
-    """Normalize to snake_case: lowercase, trim, collapse spaces, remove non-word chars."""
-    if col is None:
-        return "unnamed"
-    s = col.strip().lower()
-    # replace fancy quotes and odd spaces
-    s = s.replace("’", "'").replace("‘", "'").replace("“","\"").replace("”","\"")
-    s = re.sub(r"\s+", " ", s)          # collapse whitespace
-    s = re.sub(r"[^\w\s]", "", s)       # remove punctuation
-    s = s.strip().replace(" ", "_")     # snake
-    return s or "unnamed"
 
-def load_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        print(f"[WARN] Missing file: {path}")
+def dedupe_headers(headers: list[str]) -> list[str]:
+    """De-duplicate header names by appending ' (2)', ' (3)', ... and strip spaces."""
+    counts = defaultdict(int)
+    result = []
+    for h in headers:
+        base = (h or "").strip()
+        counts[base] += 1
+        if counts[base] == 1:
+            result.append(base or "Unnamed")
+        else:
+            result.append(f"{base or 'Unnamed'} ({counts[base]})")
+    return result
+
+
+def make_gspread_client():
+    """
+    Create gspread client from:
+    1) Streamlit secrets (Cloud): st.secrets["gcp_service_account"]
+    2) Local file: credentials/service_account.json
+    """
+    # Streamlit Cloud path
+    if st is not None:
+        try:
+            # st.secrets behaves like a dict
+            if "gcp_service_account" in st.secrets:
+                return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        except Exception as e:
+            # if secrets exists but malformed, fall through to file
+            print(f"[WARN] st.secrets present but could not be used: {e}")
+
+    # Local dev path
+    if CRED_PATH.exists():
+        return gspread.service_account(filename=str(CRED_PATH))
+
+    raise FileNotFoundError(
+        "No Google credentials found.\n"
+        "- On Streamlit Cloud: add Secrets with [gcp_service_account]\n"
+        "- Locally: place credentials/service_account.json"
+    )
+
+
+def fetch_ws_as_dataframe(gc, url: str, worksheet: str | None) -> pd.DataFrame:
+    """Fetch a worksheet safely, handling duplicate headers."""
+    sh = gc.open_by_url(url)
+    ws = sh.worksheet(worksheet) if worksheet else sh.sheet1
+
+    values = ws.get_all_values()  # list of lists
+    if not values:
         return pd.DataFrame()
-    try:
-        return pd.read_csv(path, dtype=str, encoding="utf-8")
-    except UnicodeDecodeError:
-        return pd.read_csv(path, dtype=str, encoding="latin-1")
 
-def clean_one(df: pd.DataFrame, respondent_type: str):
-    """Return: cleaned_df, columns_map_df, removed_pii_list"""
-    if df.empty:
-        return df, pd.DataFrame(columns=["original","normalized"]), []
+    headers = dedupe_headers(values[0])
+    rows = values[1:]
+    df = pd.DataFrame(rows, columns=headers)
 
-    # Save map of original->normalized
-    cols_map = [(c, normalize_col(c)) for c in df.columns]
-    cols_map_df = pd.DataFrame(cols_map, columns=["original","normalized"])
+    # Drop completely empty rows
+    df = df.dropna(how="all")
+    return df
 
-    # Drop PII columns
-    pii_cols = [c for c in df.columns if is_pii(c)]
-    df_nopii = df.drop(columns=pii_cols, errors="ignore")
-
-    # Rename to normalized names
-    df_nopii = df_nopii.rename(columns=dict(cols_map))
-
-    # Add respondent type
-    df_nopii["respondent_type"] = respondent_type
-
-    # Normalize empty strings to NaN for safer stats
-    df_nopii = df_nopii.replace({"": pd.NA})
-
-    return df_nopii, cols_map_df, pii_cols
 
 def main():
-    stud_raw   = load_csv(IN_STUD)
-    med_raw    = load_csv(IN_MED)
-    future_raw = load_csv(IN_FUTURE)
+    gc = make_gspread_client()
 
-    stud_clean,   stud_map,   stud_pii   = clean_one(stud_raw,   "student")
-    med_clean,    med_map,    med_pii    = clean_one(med_raw,    "medical")
-    future_clean, future_map, future_pii = clean_one(future_raw, "future_app_user")
+    for src in SOURCES:
+        name = src["name"]
+        url = src["url"]
+        ws_name = src.get("worksheet")
+        outfile = OUT_DIR / src["outfile"]
 
-    # Save per-dataset outputs + column maps
-    if not stud_clean.empty:
-        stud_clean.to_csv(OUT_DIR / "student_clean.csv", index=False)
-        stud_map.to_csv(META_DIR / "student_columns_map.csv", index=False)
+        df = fetch_ws_as_dataframe(gc, url, ws_name)
 
-    if not med_clean.empty:
-        med_clean.to_csv(OUT_DIR / "medical_clean.csv", index=False)
-        med_map.to_csv(META_DIR / "medical_columns_map.csv", index=False)
+        df.to_csv(outfile, index=False)
+        print(f"[{name}] Saved {len(df):,} rows → {outfile}")
+        if not df.empty:
+            print(f"[{name}] Columns ({len(df.columns)}): {list(df.columns)[:10]}{' ...' if len(df.columns) > 10 else ''}")
 
-    if not future_clean.empty:
-        future_clean.to_csv(OUT_DIR / "future_users_clean.csv", index=False)
-        future_map.to_csv(META_DIR / "future_users_columns_map.csv", index=False)
-
-    # Save PII removed list (for transparency)
-    removed_records = []
-    for name, removed in [
-        ("student", stud_pii),
-        ("medical", med_pii),
-        ("future_app_user", future_pii),
-    ]:
-        for col in removed:
-            removed_records.append({"dataset": name, "column_removed": col})
-
-    pd.DataFrame(removed_records).to_csv(META_DIR / "pii_columns_removed.csv", index=False)
-
-    # Merge with safe union of columns
-    frames = [d for d in [stud_clean, med_clean, future_clean] if isinstance(d, pd.DataFrame) and not d.empty]
-    combined = pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
-    combined = combined.fillna(pd.NA)
-    combined.to_csv(OUT_DIR / "combined_responses.csv", index=False)
-
-    # Quick health prints
-    print(f"[OK] student_clean rows: {len(stud_clean) if isinstance(stud_clean, pd.DataFrame) else 0}")
-    print(f"[OK] medical_clean rows: {len(med_clean) if isinstance(med_clean, pd.DataFrame) else 0}")
-    print(f"[OK] future_users_clean rows: {len(future_clean) if isinstance(future_clean, pd.DataFrame) else 0}")
-    print(f"[OK] combined rows: {len(combined)}")
-    print(f"[OK] combined columns: {len(combined.columns)}")
-    print(f"[OK] outputs → {OUT_DIR}")
 
 if __name__ == "__main__":
     main()
