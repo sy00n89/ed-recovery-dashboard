@@ -188,17 +188,41 @@ def keyword_bucket(series: pd.Series, buckets: dict[str, list[str]], top_n=10) -
 with st.sidebar:
     st.header("Controls")
     st.caption("Dashboard reads the merged CSV. Sync is optional.")
-    if st.button("🔄 Sync from Google Sheets now"):
-        with st.spinner("Running pull + clean scripts..."):
-            pull = subprocess.run(["python3", str(REPO / "scripts" / "pull_sheets.py")],
-                                  capture_output=True, text=True)
-            clean = subprocess.run(["python3", str(REPO / "scripts" / "clean_merge_data.py")],
-                                   capture_output=True, text=True)
+    import sys
+
+if st.button("🔄 Sync from Google Sheets now"):
+    with st.spinner("Running pull + clean scripts..."):
+        pull_cmd = [sys.executable, str(REPO / "scripts" / "pull_sheets.py")]
+        clean_cmd = [sys.executable, str(REPO / "scripts" / "clean_merge_data.py")]
+
+        pull = subprocess.run(pull_cmd, capture_output=True, text=True)
+        clean = subprocess.run(clean_cmd, capture_output=True, text=True)
+
+    with st.expander("View sync logs (debug)", expanded=True):
+        st.code("PULL CMD: " + " ".join(pull_cmd))
+        st.code("PULL RETURN CODE: " + str(pull.returncode))
+        st.code("=== pull_sheets.py STDOUT ===\n" + (pull.stdout or ""))
+        st.code("=== pull_sheets.py STDERR ===\n" + (pull.stderr or ""))
+
+        st.code("CLEAN CMD: " + " ".join(clean_cmd))
+        st.code("CLEAN RETURN CODE: " + str(clean.returncode))
+        st.code("=== clean_merge_data.py STDOUT ===\n" + (clean.stdout or ""))
+        st.code("=== clean_merge_data.py STDERR ===\n" + (clean.stderr or ""))
+
+        # Show what files exist after running
+        st.code("=== data/processed directory listing ===")
+        try:
+            files = sorted([p.name for p in (REPO / "data" / "processed").glob("*")])
+            st.write(files)
+        except Exception as e:
+            st.write("Could not list directory:", e)
+
+    if pull.returncode != 0 or clean.returncode != 0:
+        st.error("Sync failed. See logs above.")
+    else:
         st.success("Sync complete.")
-        with st.expander("View sync logs"):
-            st.code("=== pull_sheets.py ===\n" + pull.stdout + "\n" + pull.stderr)
-            st.code("=== clean_merge_data.py ===\n" + clean.stdout + "\n" + clean.stderr)
         st.rerun()
+
 
 # ───────────────────────────── Load merged data ─────────────────────────────
 # ───────────────────────────── Load / Build merged data ─────────────────────────────
