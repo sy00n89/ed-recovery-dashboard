@@ -118,9 +118,26 @@ def main():
             removed_records.append({"dataset": name, "column_removed": col})
     pd.DataFrame(removed_records).to_csv(META_DIR / "pii_columns_removed.csv", index=False)
 
-    # Merge with safe union of columns
-    combined = pd.concat([stud_clean, med_clean, future_clean], axis=0, ignore_index=True).fillna(pd.NA)
-    combined.to_csv(OUT_DIR / "combined_responses.csv", index=False)
+    # Merge with safe union of columns (ONLY non-empty frames)
+    frames = []
+    for d in [stud_clean, med_clean, future_clean]:
+        if isinstance(d, pd.DataFrame) and not d.empty:
+            frames.append(d)
+
+    out_path = OUT_DIR / "combined_responses.csv"
+
+    if not frames:
+        print("[ERROR] No rows in any dataset. Not writing combined_responses.csv.")
+        # remove any previously-created empty combined file
+        if out_path.exists():
+            out_path.unlink()
+        raise SystemExit(1)
+
+    combined = pd.concat(frames, axis=0, ignore_index=True).fillna(pd.NA)
+    combined.to_csv(out_path, index=False)
+    print(f"[OK] combined rows: {len(combined)}")
+    print(f"[OK] combined columns: {len(combined.columns)}")
+
 
     # Quick health prints
     print(f"[OK] student_clean rows: {0 if stud_clean is None else len(stud_clean)}")

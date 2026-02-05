@@ -228,7 +228,18 @@ if st.button("🔄 Sync from Google Sheets now"):
 # ───────────────────────────── Load / Build merged data ─────────────────────────────
 def build_data_if_missing():
     """Run pull + clean scripts in Streamlit Cloud if combined CSV is missing."""
-    if COMBINED.exists():
+    
+    def combined_ok(path: Path) -> bool:
+        if not path.exists():
+            return False
+        try:
+            if path.stat().st_size == 0:
+                return False
+        except Exception:
+            return False
+        return True
+
+    if combined_ok(COMBINED):
         return
 
     st.warning("combined_responses.csv not found — building it now from source sheets...")
@@ -252,10 +263,29 @@ def build_data_if_missing():
 # Build on cloud if needed
 build_data_if_missing()
 
-df = safe_read_csv(COMBINED)
-if df.empty:
-    st.error("combined_responses.csv exists but is empty/unreadable.")
-    st.stop()
+from pandas.errors import EmptyDataError, ParserError
+
+def safe_read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+
+    # If file is 0 bytes, treat as missing
+    try:
+        if path.stat().st_size == 0:
+            return pd.DataFrame()
+    except Exception:
+        pass
+
+    try:
+        df = pd.read_csv(path, dtype=str)
+    except (EmptyDataError, ParserError):
+        return pd.DataFrame()
+
+    drop_cols = [c for c in df.columns if any(k in c.lower() for k in PII_FRAGMENTS)]
+    df = df.drop(columns=drop_cols, errors="ignore")
+    df = df.replace({"": pd.NA})
+    return df
+
 
 
 # Ensure respondent_type exists
