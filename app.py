@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import sys
+
 
 # ───────────────────────────── Config ─────────────────────────────
 REPO = Path(__file__).resolve().parent
@@ -244,11 +246,11 @@ def build_data_if_missing():
 
     st.warning("combined_responses.csv not found — building it now from source sheets...")
     pull = subprocess.run(
-        ["python3", str(REPO / "scripts" / "pull_sheets.py")],
-        capture_output=True, text=True
+    [sys.executable, str(REPO / "scripts" / "pull_sheets.py")],
+    capture_output=True, text=True
     )
     clean = subprocess.run(
-        ["python3", str(REPO / "scripts" / "clean_merge_data.py")],
+        [sys.executable, str(REPO / "scripts" / "clean_merge_data.py")],
         capture_output=True, text=True
     )
 
@@ -265,28 +267,12 @@ build_data_if_missing()
 
 from pandas.errors import EmptyDataError, ParserError
 
-def safe_read_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
+# Load combined CSV
+df = safe_read_csv(COMBINED)
 
-    # If file is 0 bytes, treat as missing
-    try:
-        if path.stat().st_size == 0:
-            return pd.DataFrame()
-    except Exception:
-        pass
-
-    try:
-        df = pd.read_csv(path, dtype=str)
-    except (EmptyDataError, ParserError):
-        return pd.DataFrame()
-
-    drop_cols = [c for c in df.columns if any(k in c.lower() for k in PII_FRAGMENTS)]
-    df = df.drop(columns=drop_cols, errors="ignore")
-    df = df.replace({"": pd.NA})
-    return df
-
-
+if df.empty:
+    st.error("combined_responses.csv is empty or could not be read.")
+    st.stop()
 
 # Ensure respondent_type exists
 if "respondent_type" not in df.columns:
@@ -297,6 +283,7 @@ if "respondent_type" not in df.columns:
 df_student = df[df["respondent_type"] == "student"].copy()
 df_medical = df[df["respondent_type"] == "medical"].copy()
 df_future  = df[df["respondent_type"] == "future_app_user"].copy()
+
 
 # ───────────────────────────── Column detection (normalized headers) ─────────────────────────────
 # Students (lived experience)
