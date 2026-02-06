@@ -97,6 +97,8 @@ def make_gspread_client():
         "- Locally: place credentials/service_account.json"
     )
 
+    print("Using Streamlit secrets for Google auth")
+
 
     
 
