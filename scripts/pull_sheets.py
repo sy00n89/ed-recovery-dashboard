@@ -71,18 +71,24 @@ def make_gspread_client():
     1) Streamlit secrets (Cloud): st.secrets["gcp_service_account"]
     2) Local file: credentials/service_account.json
     """
+
     # Streamlit Cloud path
     if st is not None:
         try:
-            # st.secrets behaves like a dict
             if "gcp_service_account" in st.secrets:
-                return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+                st.write("🔐 Using Streamlit secrets for Google auth")
+                return gspread.service_account_from_dict(
+                    st.secrets["gcp_service_account"]
+                )
+            else:
+                st.write("⚠️ Streamlit secrets found, but no gcp_service_account key")
         except Exception as e:
-            # if secrets exists but malformed, fall through to file
-            print(f"[WARN] st.secrets present but could not be used: {e}")
+            st.write(f"❌ Failed to use Streamlit secrets: {e}")
 
     # Local dev path
     if CRED_PATH.exists():
+        if st is not None:
+            st.write(f"🔐 Using local service_account.json at {CRED_PATH}")
         return gspread.service_account(filename=str(CRED_PATH))
 
     raise FileNotFoundError(
@@ -90,6 +96,9 @@ def make_gspread_client():
         "- On Streamlit Cloud: add Secrets with [gcp_service_account]\n"
         "- Locally: place credentials/service_account.json"
     )
+
+
+    
 
 
 def fetch_ws_as_dataframe(gc, url: str, worksheet: str | None) -> pd.DataFrame:
